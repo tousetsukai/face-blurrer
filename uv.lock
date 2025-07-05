@@ -129,9 +129,7 @@ name = "face-blurrer"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "numpy" },
     { name = "opencv-python" },
-    { name = "pillow" },
     { name = "supervision" },
     { name = "tqdm" },
     { name = "ultralytics" },
@@ -144,9 +142,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "numpy", specifier = ">=2.3.1" },
     { name = "opencv-python", specifier = ">=4.11.0.86" },
-    { name = "pillow", specifier = ">=11.3.0" },
     { name = "supervision", specifier = ">=0.25.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "ultralytics", specifier = ">=8.3.162" },
