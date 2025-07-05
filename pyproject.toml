@@ -12,3 +12,8 @@ dependencies = [
     "tqdm>=4.67.1",
     "ultralytics>=8.3.162",
 ]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.12.2",
+]
