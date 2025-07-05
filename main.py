@@ -67,7 +67,8 @@ def process_dir(in_dir="in", out_dir="out"):
 
 
 if __name__ == "__main__":
-    import argparse, textwrap
+    import argparse
+    import textwrap
 
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawTextHelpFormatter,
