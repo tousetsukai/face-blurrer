@@ -7,6 +7,8 @@ from supervision import Detections
 BLUR_KSIZE = (101, 101)  # Gaussian kernel
 BLUR_PASSES = 2  # ぼかし回数
 BATCH = 8  # 処理バッチ数
+FACE_RATIO_HIGH_THRESHOLD = 0.008
+FACE_RATIO_LOW_THRESHOLD = 0.004
 
 # https://github.com/akanametov/yolo-face
 face_model = YOLO("yolov11m-face.pt")
@@ -28,6 +30,46 @@ def blur(roi):
     return roi
 
 
+def is_andon_face(img, fbox):
+    suspect = False
+    x1, y1, x2, y2 = map(int, fbox)
+
+    # 画像のサイズに対して顔のサイズが大きい場合は行灯の顔の疑い
+    face_area = (x2 - x1) * (y2 - y1)
+    img_area = img.shape[0] * img.shape[1]
+    face_ratio = face_area / img_area
+    if face_ratio >= FACE_RATIO_HIGH_THRESHOLD:
+        suspect = True
+    # 画像の上半分に少し大きめの顔がある場合は行灯の顔の疑い
+    height = img.shape[0]
+    if fbox[1] < height / 2 and face_ratio >= FACE_RATIO_LOW_THRESHOLD:
+        suspect = True
+
+    if suspect:
+        # 怪しいものは画像を枠付きで表示して行灯の顔かどうか確認する
+        img = img.copy()
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        cv2.putText(
+            img,
+            "Is Andon? (y/n)",
+            (x1, y1 - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 255, 0),
+            2,
+        )
+        cv2.imshow("Face Detection", img)
+        while True:
+            # ユーザーの入力を待つ
+            key = cv2.waitKey(0)
+            if key == ord("y"):
+                cv2.destroyAllWindows()
+                return True
+            elif key == ord("n"):
+                cv2.destroyAllWindows()
+                return False
+
+
 def process_dir(in_dir="in", out_dir="out"):
     ensure_empty_out_dir(out_dir)
     in_dir, out_dir = Path(in_dir), Path(out_dir)
@@ -37,7 +79,6 @@ def process_dir(in_dir="in", out_dir="out"):
 
     for i in tqdm(range(0, len(paths), BATCH), desc="Batches"):
         batch_paths = paths[i : i + BATCH]
-        print("paths:", batch_paths)
         imgs = [cv2.imread(str(p)) for p in batch_paths]
 
         # 1) 推論
@@ -48,13 +89,15 @@ def process_dir(in_dir="in", out_dir="out"):
             faces_xyxy = Detections.from_ultralytics(fp).xyxy
 
             if faces_xyxy is None or len(faces_xyxy) == 0:
-                print(f"No faces detected in {path.name}")
                 continue
 
             for fbox in faces_xyxy:
                 x1, y1, x2, y2 = map(int, fbox)
                 roi = img[y1:y2, x1:x2]
                 if roi.size == 0:
+                    continue
+                if is_andon_face(img, fbox):
+                    print(f"'Andon' face detected in {path}")
                     continue
                 img[y1:y2, x1:x2] = blur(roi)
 
