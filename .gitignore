@@ -8,3 +8,10 @@ wheels/
 
 # Virtual environments
 .venv
+
+# models
+yolov11m-face.pt
+
+# image dirs
+/in
+/out
