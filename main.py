@@ -12,6 +12,15 @@ BATCH = 8  # 処理バッチ数
 face_model = YOLO("yolov11m-face.pt")
 
 
+def ensure_empty_out_dir(out_dir="out"):
+    """Ensure the output directory is empty."""
+    out_dir = Path(out_dir)
+    if out_dir.exists() and any(out_dir.iterdir()):
+        print(f"Output directory `{out_dir}` is not empty. Please clear it.")
+        exit(1)
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+
 def blur(roi):
     """Apply Gaussian blur to the region of interest."""
     for _ in range(BLUR_PASSES):
@@ -20,8 +29,8 @@ def blur(roi):
 
 
 def process_dir(in_dir="in", out_dir="out"):
+    ensure_empty_out_dir(out_dir)
     in_dir, out_dir = Path(in_dir), Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
     paths = sorted(
         list(p for ext in ("jpg", "jpeg", "png") for p in in_dir.rglob(f"*.{ext}"))
     )
@@ -49,7 +58,12 @@ def process_dir(in_dir="in", out_dir="out"):
                     continue
                 img[y1:y2, x1:x2] = blur(roi)
 
-            cv2.imwrite(str(out_dir / path.name), img)
+            # 保存先のパスをインプット側のディレクトリ構造を保って作成
+            rel_path = path.relative_to(in_dir)
+            save_path = out_dir / rel_path
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+
+            cv2.imwrite(str(save_path), img)
 
 
 if __name__ == "__main__":
