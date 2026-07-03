@@ -45,9 +45,9 @@ def blur(roi):
     return roi
 
 
-def is_suspect(img_shape, box):
+def is_suspect(size, box):
+    width, height = size
     x1, y1, x2, y2 = box
-    height, width = img_shape[:2]
     face_ratio = (x2 - x1) * (y2 - y1) / (height * width)
     # 画像のサイズに対して顔のサイズが大きい場合は行灯の顔の疑い
     if face_ratio >= FACE_RATIO_HIGH_THRESHOLD:
@@ -108,11 +108,16 @@ def detect(in_dir, work_dir, device="auto"):
                 device = "cpu"
                 results = cpu_results
         for img, res, path in zip(imgs, results, batch_paths):
-            faces = []
-            for fbox in Detections.from_ultralytics(res).xyxy:
-                box = [int(v) for v in fbox]
-                faces.append({"box": box, "suspect": is_suspect(img.shape, box)})
-            files[path.relative_to(in_dir).as_posix()] = {"faces": faces}
+            # suspect 判定はここでは行わない。review/render 時に計算することで、
+            # 閾値を変えても検出をやり直さずに済む
+            faces = [
+                {"box": [int(v) for v in fbox]}
+                for fbox in Detections.from_ultralytics(res).xyxy
+            ]
+            files[path.relative_to(in_dir).as_posix()] = {
+                "size": [img.shape[1], img.shape[0]],
+                "faces": faces,
+            }
         # バッチごとに保存し、中断しても再開できるようにする
         save_json(detections_path, detections)
 
@@ -146,7 +151,10 @@ def pending_suspects(detections, decisions):
     for rel_path, entry in detections["files"].items():
         decided = {tuple(d["box"]) for d in decisions.get(rel_path, [])}
         for face in entry["faces"]:
-            if face["suspect"] and tuple(face["box"]) not in decided:
+            if (
+                is_suspect(entry["size"], face["box"])
+                and tuple(face["box"]) not in decided
+            ):
                 pending.append((rel_path, face["box"]))
     return pending
 
