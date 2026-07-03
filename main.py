@@ -58,11 +58,24 @@ def is_suspect(img_shape, box):
     return False
 
 
-def detect(in_dir, work_dir):
+def pick_device():
+    """Apple Silicon GPU (MPS) が使えれば使う"""
+    import torch
+
+    if torch.backends.mps.is_available():
+        return "mps"
+    return None
+
+
+def detect(in_dir, work_dir, device="auto"):
     """フェーズ1: 全画像の顔検出を行い detections.json に保存する（無人・重い）"""
     # review/render ではモデルを読み込まなくて済むよう、ここで import する
     from supervision import Detections
     from ultralytics import YOLO
+
+    if device == "auto":
+        device = pick_device()
+    print(f"Using device: {device or 'cpu'}")
 
     detections_path = work_dir / DETECTIONS_FILE
     detections = load_json(
@@ -84,7 +97,16 @@ def detect(in_dir, work_dir):
     for i in tqdm(range(0, len(paths), BATCH), desc="Detect"):
         batch_paths = paths[i : i + BATCH]
         imgs = [cv2.imread(str(p)) for p in batch_paths]
-        results = model.predict(imgs, verbose=False)
+        results = model.predict(imgs, device=device, verbose=False)
+
+        # MPS の初回推論が誤った結果 (顔が全て消える) を返すことが稀にあったため、
+        # 最初のバッチだけ CPU と突き合わせ、食い違ったら CPU に切り替える
+        if i == 0 and device not in (None, "cpu"):
+            cpu_results = model.predict(imgs, device="cpu", verbose=False)
+            if [len(r.boxes) for r in results] != [len(r.boxes) for r in cpu_results]:
+                print(f"Warning: `{device}` disagrees with `cpu`. Falling back to cpu.")
+                device = "cpu"
+                results = cpu_results
         for img, res, path in zip(imgs, results, batch_paths):
             faces = []
             for fbox in Detections.from_ultralytics(res).xyxy:
@@ -254,6 +276,11 @@ if __name__ == "__main__":
         action="store_true",
         help="re-render files that already exist in out_dir",
     )
+    parser.add_argument(
+        "--device",
+        default="auto",
+        help="inference device: auto (default; mps if available), cpu, mps, ...",
+    )
     args = parser.parse_args()
 
     in_dir, out_dir, work_dir = (
@@ -262,7 +289,7 @@ if __name__ == "__main__":
         Path(args.work_dir),
     )
     if args.command in ("detect", "all"):
-        detect(in_dir, work_dir)
+        detect(in_dir, work_dir, device=args.device)
     if args.command in ("review", "all"):
         review(in_dir, work_dir)
     if args.command in ("render", "all"):
