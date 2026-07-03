@@ -11,6 +11,10 @@ MODEL_PATH = "yolov11m-face.pt"
 BLUR_KSIZE = (101, 101)  # Gaussian kernel
 BLUR_PASSES = 2  # ぼかし回数
 BATCH = 8  # 処理バッチ数
+# 4000〜6000px の写真では YOLO デフォルトの 640 に縮小すると遠くの顔が
+# 数 px になり検出漏れするため、デフォルトを大きめにしている
+DEFAULT_IMGSZ = 1280
+DEFAULT_CONF = 0.25  # YOLO デフォルトと同じ
 FACE_RATIO_HIGH_THRESHOLD = 0.008
 FACE_RATIO_LOW_THRESHOLD = 0.004
 FACE_TOP_BAND = 0.4  # 顔の中心がこの比率より上にあれば行灯の顔の疑い
@@ -73,7 +77,7 @@ def pick_device():
     return None
 
 
-def detect(in_dir, work_dir, device="auto"):
+def detect(in_dir, work_dir, device="auto", imgsz=DEFAULT_IMGSZ, conf=DEFAULT_CONF):
     """フェーズ1: 全画像の顔検出を行い detections.json に保存する（無人・重い）"""
     # review/render ではモデルを読み込まなくて済むよう、ここで import する
     from supervision import Detections
@@ -84,9 +88,16 @@ def detect(in_dir, work_dir, device="auto"):
     print(f"Using device: {device or 'cpu'}")
 
     detections_path = work_dir / DETECTIONS_FILE
-    detections = load_json(
-        detections_path, {"meta": {"model": MODEL_PATH}, "files": {}}
-    )
+    meta = {"model": MODEL_PATH, "imgsz": imgsz, "conf": conf}
+    detections = load_json(detections_path, {"meta": meta, "files": {}})
+    if detections["meta"] != meta:
+        # 設定の違う検出結果が混ざると結果に一貫性がなくなるので中断する
+        print(
+            f"Settings mismatch: {detections_path} was created with "
+            f"{detections['meta']}, but current settings are {meta}. "
+            "Use a fresh work dir (or delete it) to re-detect."
+        )
+        exit(1)
     files = detections["files"]
 
     paths = [
@@ -103,12 +114,16 @@ def detect(in_dir, work_dir, device="auto"):
     for i in tqdm(range(0, len(paths), BATCH), desc="Detect"):
         batch_paths = paths[i : i + BATCH]
         imgs = [cv2.imread(str(p)) for p in batch_paths]
-        results = model.predict(imgs, device=device, verbose=False)
+        results = model.predict(
+            imgs, device=device, imgsz=imgsz, conf=conf, verbose=False
+        )
 
         # MPS の初回推論が誤った結果 (顔が全て消える) を返すことが稀にあったため、
         # 最初のバッチだけ CPU と突き合わせ、食い違ったら CPU に切り替える
         if i == 0 and device not in (None, "cpu"):
-            cpu_results = model.predict(imgs, device="cpu", verbose=False)
+            cpu_results = model.predict(
+                imgs, device="cpu", imgsz=imgsz, conf=conf, verbose=False
+            )
             if [len(r.boxes) for r in results] != [len(r.boxes) for r in cpu_results]:
                 print(f"Warning: `{device}` disagrees with `cpu`. Falling back to cpu.")
                 device = "cpu"
@@ -295,6 +310,20 @@ if __name__ == "__main__":
         default="auto",
         help="inference device: auto (default; mps if available), cpu, mps, ...",
     )
+    parser.add_argument(
+        "--imgsz",
+        type=int,
+        default=DEFAULT_IMGSZ,
+        help=f"inference image size (default: {DEFAULT_IMGSZ}); "
+        "larger finds smaller faces but is slower",
+    )
+    parser.add_argument(
+        "--conf",
+        type=float,
+        default=DEFAULT_CONF,
+        help=f"detection confidence threshold (default: {DEFAULT_CONF}); "
+        "lower finds more faces but with more false positives",
+    )
     args = parser.parse_args()
 
     in_dir, out_dir, work_dir = (
@@ -303,7 +332,7 @@ if __name__ == "__main__":
         Path(args.work_dir),
     )
     if args.command in ("detect", "all"):
-        detect(in_dir, work_dir, device=args.device)
+        detect(in_dir, work_dir, device=args.device, imgsz=args.imgsz, conf=args.conf)
     if args.command in ("review", "all"):
         review(in_dir, work_dir)
     if args.command in ("render", "all"):
