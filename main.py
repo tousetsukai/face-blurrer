@@ -176,27 +176,43 @@ def detect(in_dir, work_dir, device="auto", imgsz=DEFAULT_IMGSZ, conf=DEFAULT_CO
         save_json(detections_path, detections)
 
 
-def ask_andon(img, box):
-    """疑い顔を枠付きで表示して行灯の顔かどうか確認する"""
+def ask_andon(img, box, progress):
+    """疑い顔を枠付きで表示して行灯の顔かどうか確認する
+
+    y/n で回答する。q キーまたはウィンドウを閉じると中断 (None を返す)。
+    """
     x1, y1, x2, y2 = box
+    h, w = img.shape[:2]
     img = img.copy()
-    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    # 4000px 級の画像でも見えるよう、枠線・文字は画像サイズに比例させる
+    thickness = max(2, w // 800)
+    font_scale = w / 2000
+    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), thickness)
     cv2.putText(
         img,
-        "Is Andon? (y/n)",
-        (x1, y1 - 10),
+        f"Is Andon? (y/n, q=quit) {progress}",
+        (x1, max(int(40 * font_scale), y1 - 10)),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.5,
+        font_scale,
         (0, 255, 0),
-        2,
+        thickness,
     )
+    # 画像そのままだと画面からはみ出すので、収まるサイズのウィンドウにする
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+    scale = min(1.0, 1400 / w, 900 / h)
+    cv2.resizeWindow(WINDOW_NAME, int(w * scale), int(h * scale))
     cv2.imshow(WINDOW_NAME, img)
     while True:
-        key = cv2.waitKey(0)
+        key = cv2.waitKey(100)
         if key == ord("y"):
             return True
-        elif key == ord("n"):
+        if key == ord("n"):
             return False
+        if key == ord("q"):
+            return None
+        # ウィンドウが閉じられたら中断扱いにする (放置すると抜けられなくなる)
+        if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+            return None
 
 
 def pending_suspects(detections, decisions):
@@ -228,12 +244,17 @@ def review(in_dir, work_dir):
         return
 
     print(f"{len(pending)} suspect faces to review.")
-    for rel_path, box in pending:
+    for idx, (rel_path, box) in enumerate(pending):
         img = cv2.imread(str(in_dir / rel_path))
         if img is None:
             print(f"Warning: cannot read {in_dir / rel_path}. Skipping.")
             continue
-        andon = ask_andon(img, box)
+        andon = ask_andon(img, box, f"[{idx + 1}/{len(pending)}]")
+        if andon is None:
+            print(
+                "Review interrupted. Progress is saved; run review again to continue."
+            )
+            break
         if andon:
             print(f"'Andon' face marked in {rel_path}")
         decisions.setdefault(rel_path, []).append({"box": box, "andon": andon})
