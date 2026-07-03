@@ -17,6 +17,8 @@ BATCH = 8  # 処理バッチ数
 # 数 px になり検出漏れするため、デフォルトを大きめにしている
 DEFAULT_IMGSZ = 1280
 DEFAULT_CONF = 0.25  # YOLO デフォルトと同じ
+# 再エンコードによる劣化をできるだけ抑える (cv2 デフォルトは 95)
+DEFAULT_JPEG_QUALITY = 97
 FACE_RATIO_HIGH_THRESHOLD = 0.008
 FACE_RATIO_LOW_THRESHOLD = 0.004
 FACE_TOP_BAND = 0.4  # 顔の中心がこの比率より上にあれば行灯の顔の疑い
@@ -282,7 +284,7 @@ def copy_exif(src_path, dst_path):
         print(f"Warning: failed to copy EXIF for {dst_path}: {e}")
 
 
-def render(in_dir, out_dir, work_dir, force=False):
+def render(in_dir, out_dir, work_dir, force=False, jpeg_quality=DEFAULT_JPEG_QUALITY):
     """フェーズ3: 判断結果を使って顔をぼかし、out_dir に書き出す（無人・軽い）"""
     detections = load_json(work_dir / DETECTIONS_FILE, None)
     if detections is None:
@@ -318,7 +320,10 @@ def render(in_dir, out_dir, work_dir, force=False):
 
         # 保存先のパスをインプット側のディレクトリ構造を保って作成
         save_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(save_path), img)
+        params = []
+        if save_path.suffix.lower() in (".jpg", ".jpeg"):
+            params = [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality]
+        cv2.imwrite(str(save_path), img, params)
         copy_exif(in_dir / rel_path, save_path)
 
     if skipped:
@@ -380,6 +385,12 @@ if __name__ == "__main__":
         help=f"detection confidence threshold (default: {DEFAULT_CONF}); "
         "lower finds more faces but with more false positives",
     )
+    parser.add_argument(
+        "--jpeg_quality",
+        type=int,
+        default=DEFAULT_JPEG_QUALITY,
+        help=f"jpeg output quality (default: {DEFAULT_JPEG_QUALITY})",
+    )
     args = parser.parse_args()
 
     in_dir, out_dir, work_dir = (
@@ -392,4 +403,10 @@ if __name__ == "__main__":
     if args.command in ("review", "all"):
         review(in_dir, work_dir)
     if args.command in ("render", "all"):
-        render(in_dir, out_dir, work_dir, force=args.force)
+        render(
+            in_dir,
+            out_dir,
+            work_dir,
+            force=args.force,
+            jpeg_quality=args.jpeg_quality,
+        )
