@@ -4,6 +4,7 @@ import textwrap
 from pathlib import Path
 
 import cv2
+import numpy as np
 import piexif
 from tqdm import tqdm
 
@@ -61,9 +62,17 @@ def blur_face(img, box):
         return
     # 固定カーネルだと大きい顔でぼかしが足りないので顔サイズに比例させる (奇数化)
     k = max(BLUR_KSIZE_MIN, (max(x2 - x1, y2 - y1) // 2) | 1)
+    blurred = roi
     for _ in range(BLUR_PASSES):
-        roi = cv2.GaussianBlur(roi, (k, k), 0)
-    img[y1:y2, x1:x2] = roi
+        blurred = cv2.GaussianBlur(blurred, (k, k), 0)
+    # 矩形だと不自然なので、境界をぼかした楕円マスクで合成する
+    mask = np.zeros(roi.shape[:2], dtype=np.float32)
+    center = ((x2 - x1) // 2, (y2 - y1) // 2)
+    axes = ((x2 - x1) // 2, (y2 - y1) // 2)
+    cv2.ellipse(mask, center, axes, 0, 0, 360, 1.0, -1)
+    feather = (max(min(axes) // 4, 3) * 2) | 1
+    mask = cv2.GaussianBlur(mask, (feather, feather), 0)[..., None]
+    img[y1:y2, x1:x2] = (blurred * mask + roi * (1.0 - mask)).astype(img.dtype)
 
 
 def is_suspect(size, box):
