@@ -8,8 +8,9 @@ import piexif
 from tqdm import tqdm
 
 MODEL_PATH = "yolov11m-face.pt"
-BLUR_KSIZE = (101, 101)  # Gaussian kernel
 BLUR_PASSES = 2  # ぼかし回数
+BLUR_PAD_RATIO = 0.15  # 検出 box ちょうどだと輪郭が残るので少し広げてぼかす
+BLUR_KSIZE_MIN = 51  # Gaussian kernel の最小サイズ
 BATCH = 8  # 処理バッチ数
 # 4000〜6000px の写真では YOLO デフォルトの 640 に縮小すると遠くの顔が
 # 数 px になり検出漏れするため、デフォルトを大きめにしている
@@ -46,11 +47,23 @@ def save_json(path, data):
     tmp.replace(path)
 
 
-def blur(roi):
-    """Apply Gaussian blur to the region of interest."""
+def blur_face(img, box):
+    """box の顔をぼかす (img を直接書き換える)"""
+    x1, y1, x2, y2 = box
+    h, w = img.shape[:2]
+    # 検出 box ちょうどだとあご・額の輪郭が残るので少し広げる
+    pad_x = int((x2 - x1) * BLUR_PAD_RATIO)
+    pad_y = int((y2 - y1) * BLUR_PAD_RATIO)
+    x1, y1 = max(0, x1 - pad_x), max(0, y1 - pad_y)
+    x2, y2 = min(w, x2 + pad_x), min(h, y2 + pad_y)
+    roi = img[y1:y2, x1:x2]
+    if roi.size == 0:
+        return
+    # 固定カーネルだと大きい顔でぼかしが足りないので顔サイズに比例させる (奇数化)
+    k = max(BLUR_KSIZE_MIN, (max(x2 - x1, y2 - y1) // 2) | 1)
     for _ in range(BLUR_PASSES):
-        roi = cv2.GaussianBlur(roi, BLUR_KSIZE, 0)
-    return roi
+        roi = cv2.GaussianBlur(roi, (k, k), 0)
+    img[y1:y2, x1:x2] = roi
 
 
 def is_suspect(size, box):
@@ -271,11 +284,7 @@ def render(in_dir, out_dir, work_dir, force=False):
             box = face["box"]
             if tuple(box) in andon_boxes:
                 continue
-            x1, y1, x2, y2 = box
-            roi = img[y1:y2, x1:x2]
-            if roi.size == 0:
-                continue
-            img[y1:y2, x1:x2] = blur(roi)
+            blur_face(img, box)
 
         # 保存先のパスをインプット側のディレクトリ構造を保って作成
         save_path.parent.mkdir(parents=True, exist_ok=True)
