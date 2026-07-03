@@ -4,6 +4,7 @@ import textwrap
 from pathlib import Path
 
 import cv2
+import piexif
 from tqdm import tqdm
 
 MODEL_PATH = "yolov11m-face.pt"
@@ -154,6 +155,25 @@ def review(in_dir, work_dir):
     cv2.destroyAllWindows()
 
 
+def copy_exif(src_path, dst_path):
+    """元画像の EXIF を出力画像にコピーする (JPEG のみ)
+
+    cv2.imwrite は EXIF を全て落とすため、書き出し後にコピーし直す。
+    """
+    if dst_path.suffix.lower() not in (".jpg", ".jpeg"):
+        return
+    try:
+        exif_dict = piexif.load(str(src_path))
+        # EXIF 内サムネイルにはぼかし前の画像が残るため必ず除去する
+        exif_dict["thumbnail"] = None
+        # cv2.imread は Orientation を解釈してピクセルを回転させるので、
+        # タグを 1 にリセットしないとビューアで二重回転する
+        exif_dict["0th"][piexif.ImageIFD.Orientation] = 1
+        piexif.insert(piexif.dump(exif_dict), str(dst_path))
+    except Exception as e:
+        print(f"Warning: failed to copy EXIF for {dst_path}: {e}")
+
+
 def render(in_dir, out_dir, work_dir, force=False):
     """フェーズ3: 判断結果を使って顔をぼかし、out_dir に書き出す（無人・軽い）"""
     detections = load_json(work_dir / DETECTIONS_FILE, None)
@@ -192,6 +212,7 @@ def render(in_dir, out_dir, work_dir, force=False):
         # 保存先のパスをインプット側のディレクトリ構造を保って作成
         save_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(save_path), img)
+        copy_exif(in_dir / rel_path, save_path)
 
     if skipped:
         print(f"Skipped {skipped} already-rendered files (use --force to redo).")
