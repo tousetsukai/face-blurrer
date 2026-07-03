@@ -26,7 +26,10 @@ WINDOW_NAME = "Face Detection"
 
 
 def list_images(in_dir):
-    return sorted(p for ext in IMG_EXTS for p in in_dir.rglob(f"*.{ext}"))
+    # カメラ由来の .JPG など大文字拡張子も拾う
+    return sorted(
+        p for ext in IMG_EXTS for p in in_dir.rglob(f"*.{ext}", case_sensitive=False)
+    )
 
 
 def load_json(path, default):
@@ -114,8 +117,16 @@ def detect(in_dir, work_dir, device="auto", imgsz=DEFAULT_IMGSZ, conf=DEFAULT_CO
     for i in tqdm(range(0, len(paths), BATCH), desc="Detect"):
         batch_paths = paths[i : i + BATCH]
         imgs = [cv2.imread(str(p)) for p in batch_paths]
+        # 読めないファイルが混ざっていると predict ごと落ちるので除いておく
+        for p, img in zip(batch_paths, imgs):
+            if img is None:
+                print(f"Warning: cannot read {p}. Skipping.")
+        batch = [(p, img) for p, img in zip(batch_paths, imgs) if img is not None]
+        if not batch:
+            continue
+        batch_paths, imgs = zip(*batch)
         results = model.predict(
-            imgs, device=device, imgsz=imgsz, conf=conf, verbose=False
+            list(imgs), device=device, imgsz=imgsz, conf=conf, verbose=False
         )
 
         # MPS の初回推論が誤った結果 (顔が全て消える) を返すことが稀にあったため、
@@ -197,6 +208,9 @@ def review(in_dir, work_dir):
     print(f"{len(pending)} suspect faces to review.")
     for rel_path, box in pending:
         img = cv2.imread(str(in_dir / rel_path))
+        if img is None:
+            print(f"Warning: cannot read {in_dir / rel_path}. Skipping.")
+            continue
         andon = ask_andon(img, box)
         if andon:
             print(f"'Andon' face marked in {rel_path}")
@@ -247,6 +261,9 @@ def render(in_dir, out_dir, work_dir, force=False):
             continue
 
         img = cv2.imread(str(in_dir / rel_path))
+        if img is None:
+            print(f"Warning: cannot read {in_dir / rel_path}. Skipping.")
+            continue
         andon_boxes = {
             tuple(d["box"]) for d in decisions.get(rel_path, []) if d["andon"]
         }
