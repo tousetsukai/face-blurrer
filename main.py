@@ -8,7 +8,7 @@ import numpy as np
 import piexif
 from tqdm import tqdm
 
-MODEL_PATH = "yolov11m-face.pt"
+MODEL_PATH = "yolov12m-face.pt"
 BLUR_PASSES = 2  # ぼかし回数
 BLUR_PAD_RATIO = 0.15  # 検出 box ちょうどだと輪郭が残るので少し広げてぼかす
 BLUR_KSIZE_MIN = 51  # Gaussian kernel の最小サイズ

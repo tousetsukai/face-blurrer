@@ -19,11 +19,11 @@ endif
 PARAMS=$(IN_DIR_PARAM) $(OUT_DIR_PARAM) $(WORK_DIR_PARAM)
 
 .PHONY: run
-run: yolov11m-face.pt sync
+run: yolov12m-face.pt sync
 	uv run main.py $(PARAMS)
 
 .PHONY: detect
-detect: yolov11m-face.pt sync
+detect: yolov12m-face.pt sync
 	uv run main.py detect $(PARAMS)
 
 .PHONY: review
@@ -34,9 +34,9 @@ review: sync
 render: sync
 	uv run main.py render $(PARAMS)
 
-yolov11m-face.pt:
+yolov12m-face.pt:
 	@echo "Downloading face detection model..."
-	@wget -O $@ https://github.com/akanametov/yolo-face/releases/download/v0.0.0/$@
+	@wget -O $@ https://github.com/akanametov/yolo-face/releases/download/1.0.0/$@
 
 .PHONY: sync
 sync:

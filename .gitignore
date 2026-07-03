@@ -13,7 +13,7 @@ wheels/
 .venv
 
 # models
-yolov11m-face.pt
+*-face.pt
 
 # image dirs
 /in
