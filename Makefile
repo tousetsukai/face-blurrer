@@ -10,9 +10,29 @@ else
 OUT_DIR_PARAM=--out_dir $(OUT_DIR)
 endif
 
+ifeq ($(WORK_DIR),)
+WORK_DIR_PARAM=
+else
+WORK_DIR_PARAM=--work_dir $(WORK_DIR)
+endif
+
+PARAMS=$(IN_DIR_PARAM) $(OUT_DIR_PARAM) $(WORK_DIR_PARAM)
+
 .PHONY: run
 run: yolov11m-face.pt sync
-	uv run main.py $(IN_DIR_PARAM) $(OUT_DIR_PARAM)
+	uv run main.py $(PARAMS)
+
+.PHONY: detect
+detect: yolov11m-face.pt sync
+	uv run main.py detect $(PARAMS)
+
+.PHONY: review
+review: sync
+	uv run main.py review $(PARAMS)
+
+.PHONY: render
+render: sync
+	uv run main.py render $(PARAMS)
 
 yolov11m-face.pt:
 	@echo "Downloading face detection model..."
