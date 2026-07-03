@@ -1,26 +1,40 @@
-import cv2
+import argparse
+import json
+import textwrap
 from pathlib import Path
-from tqdm import tqdm
-from ultralytics import YOLO
-from supervision import Detections
 
+import cv2
+from tqdm import tqdm
+
+MODEL_PATH = "yolov11m-face.pt"
 BLUR_KSIZE = (101, 101)  # Gaussian kernel
 BLUR_PASSES = 2  # ぼかし回数
 BATCH = 8  # 処理バッチ数
 FACE_RATIO_HIGH_THRESHOLD = 0.008
 FACE_RATIO_LOW_THRESHOLD = 0.004
+IMG_EXTS = ("jpg", "jpeg", "png")
 
-# https://github.com/akanametov/yolo-face
-face_model = YOLO("yolov11m-face.pt")
+DETECTIONS_FILE = "detections.json"
+DECISIONS_FILE = "decisions.json"
+WINDOW_NAME = "Face Detection"
 
 
-def ensure_empty_out_dir(out_dir="out"):
-    """Ensure the output directory is empty."""
-    out_dir = Path(out_dir)
-    if out_dir.exists() and any(out_dir.iterdir()):
-        print(f"Output directory `{out_dir}` is not empty. Please clear it.")
-        exit(1)
-    out_dir.mkdir(parents=True, exist_ok=True)
+def list_images(in_dir):
+    return sorted(p for ext in IMG_EXTS for p in in_dir.rglob(f"*.{ext}"))
+
+
+def load_json(path, default):
+    if path.exists():
+        return json.loads(path.read_text())
+    return default
+
+
+def save_json(path, data):
+    """テンポラリファイル経由のアトミック書き込み（中断でファイルを壊さないため）"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    tmp.replace(path)
 
 
 def blur(roi):
@@ -30,89 +44,160 @@ def blur(roi):
     return roi
 
 
-def is_andon_face(img, fbox):
-    suspect = False
-    x1, y1, x2, y2 = map(int, fbox)
-
+def is_suspect(img_shape, box):
+    x1, y1, x2, y2 = box
+    height, width = img_shape[:2]
+    face_ratio = (x2 - x1) * (y2 - y1) / (height * width)
     # 画像のサイズに対して顔のサイズが大きい場合は行灯の顔の疑い
-    face_area = (x2 - x1) * (y2 - y1)
-    img_area = img.shape[0] * img.shape[1]
-    face_ratio = face_area / img_area
     if face_ratio >= FACE_RATIO_HIGH_THRESHOLD:
-        suspect = True
+        return True
     # 画像の上半分に少し大きめの顔がある場合は行灯の顔の疑い
-    height = img.shape[0]
-    if fbox[1] < height / 2 and face_ratio >= FACE_RATIO_LOW_THRESHOLD:
-        suspect = True
-
-    if suspect:
-        # 怪しいものは画像を枠付きで表示して行灯の顔かどうか確認する
-        img = img.copy()
-        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
-        cv2.putText(
-            img,
-            "Is Andon? (y/n)",
-            (x1, y1 - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (0, 255, 0),
-            2,
-        )
-        cv2.imshow("Face Detection", img)
-        while True:
-            # ユーザーの入力を待つ
-            key = cv2.waitKey(0)
-            if key == ord("y"):
-                cv2.destroyAllWindows()
-                return True
-            elif key == ord("n"):
-                cv2.destroyAllWindows()
-                return False
+    if y1 < height / 2 and face_ratio >= FACE_RATIO_LOW_THRESHOLD:
+        return True
+    return False
 
 
-def process_dir(in_dir="in", out_dir="out"):
-    ensure_empty_out_dir(out_dir)
-    in_dir, out_dir = Path(in_dir), Path(out_dir)
-    paths = sorted(
-        list(p for ext in ("jpg", "jpeg", "png") for p in in_dir.rglob(f"*.{ext}"))
+def detect(in_dir, work_dir):
+    """フェーズ1: 全画像の顔検出を行い detections.json に保存する（無人・重い）"""
+    # review/render ではモデルを読み込まなくて済むよう、ここで import する
+    from supervision import Detections
+    from ultralytics import YOLO
+
+    detections_path = work_dir / DETECTIONS_FILE
+    detections = load_json(
+        detections_path, {"meta": {"model": MODEL_PATH}, "files": {}}
     )
+    files = detections["files"]
 
-    for i in tqdm(range(0, len(paths), BATCH), desc="Batches"):
+    paths = [
+        p for p in list_images(in_dir) if p.relative_to(in_dir).as_posix() not in files
+    ]
+    skipped = len(list_images(in_dir)) - len(paths)
+    if skipped:
+        print(f"Skipping {skipped} already-detected files.")
+    if not paths:
+        print("Nothing to detect.")
+        return
+
+    model = YOLO(MODEL_PATH)
+    for i in tqdm(range(0, len(paths), BATCH), desc="Detect"):
         batch_paths = paths[i : i + BATCH]
         imgs = [cv2.imread(str(p)) for p in batch_paths]
+        results = model.predict(imgs, verbose=False)
+        for img, res, path in zip(imgs, results, batch_paths):
+            faces = []
+            for fbox in Detections.from_ultralytics(res).xyxy:
+                box = [int(v) for v in fbox]
+                faces.append({"box": box, "suspect": is_suspect(img.shape, box)})
+            files[path.relative_to(in_dir).as_posix()] = {"faces": faces}
+        # バッチごとに保存し、中断しても再開できるようにする
+        save_json(detections_path, detections)
 
-        # 1) 推論
-        faces_res = face_model.predict(imgs, verbose=False)
 
-        # 2) 各画像ごとにぼかし処理
-        for img, fp, path in zip(imgs, faces_res, batch_paths):
-            faces_xyxy = Detections.from_ultralytics(fp).xyxy
+def ask_andon(img, box):
+    """疑い顔を枠付きで表示して行灯の顔かどうか確認する"""
+    x1, y1, x2, y2 = box
+    img = img.copy()
+    cv2.rectangle(img, (x1, y1), (x2, y2), (0, 255, 0), 2)
+    cv2.putText(
+        img,
+        "Is Andon? (y/n)",
+        (x1, y1 - 10),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 255, 0),
+        2,
+    )
+    cv2.imshow(WINDOW_NAME, img)
+    while True:
+        key = cv2.waitKey(0)
+        if key == ord("y"):
+            return True
+        elif key == ord("n"):
+            return False
 
-            if faces_xyxy is None or len(faces_xyxy) == 0:
+
+def pending_suspects(detections, decisions):
+    """未回答の行灯疑い顔を (相対パス, box) のリストで返す"""
+    pending = []
+    for rel_path, entry in detections["files"].items():
+        decided = {tuple(d["box"]) for d in decisions.get(rel_path, [])}
+        for face in entry["faces"]:
+            if face["suspect"] and tuple(face["box"]) not in decided:
+                pending.append((rel_path, face["box"]))
+    return pending
+
+
+def review(in_dir, work_dir):
+    """フェーズ2: 行灯疑いの顔を人間が y/n で判断し decisions.json に保存する（対話）"""
+    detections = load_json(work_dir / DETECTIONS_FILE, None)
+    if detections is None:
+        print(f"No {DETECTIONS_FILE} found in `{work_dir}`. Run detect first.")
+        exit(1)
+    decisions_path = work_dir / DECISIONS_FILE
+    decisions = load_json(decisions_path, {})
+
+    pending = pending_suspects(detections, decisions)
+    if not pending:
+        print("No suspect faces to review.")
+        return
+
+    print(f"{len(pending)} suspect faces to review.")
+    for rel_path, box in pending:
+        img = cv2.imread(str(in_dir / rel_path))
+        andon = ask_andon(img, box)
+        if andon:
+            print(f"'Andon' face marked in {rel_path}")
+        decisions.setdefault(rel_path, []).append({"box": box, "andon": andon})
+        # 1 回答ごとに保存し、中断しても回答をやり直さなくて済むようにする
+        save_json(decisions_path, decisions)
+    cv2.destroyAllWindows()
+
+
+def render(in_dir, out_dir, work_dir, force=False):
+    """フェーズ3: 判断結果を使って顔をぼかし、out_dir に書き出す（無人・軽い）"""
+    detections = load_json(work_dir / DETECTIONS_FILE, None)
+    if detections is None:
+        print(f"No {DETECTIONS_FILE} found in `{work_dir}`. Run detect first.")
+        exit(1)
+    decisions = load_json(work_dir / DECISIONS_FILE, {})
+
+    # 未回答の疑い顔が残ったまま書き出すと誤ったぼかし方をするので中断する
+    pending = pending_suspects(detections, decisions)
+    if pending:
+        print(f"{len(pending)} suspect faces are not reviewed yet. Run review first.")
+        exit(1)
+
+    skipped = 0
+    for rel_path, entry in tqdm(detections["files"].items(), desc="Render"):
+        save_path = out_dir / rel_path
+        if save_path.exists() and not force:
+            skipped += 1
+            continue
+
+        img = cv2.imread(str(in_dir / rel_path))
+        andon_boxes = {
+            tuple(d["box"]) for d in decisions.get(rel_path, []) if d["andon"]
+        }
+        for face in entry["faces"]:
+            box = face["box"]
+            if tuple(box) in andon_boxes:
                 continue
+            x1, y1, x2, y2 = box
+            roi = img[y1:y2, x1:x2]
+            if roi.size == 0:
+                continue
+            img[y1:y2, x1:x2] = blur(roi)
 
-            for fbox in faces_xyxy:
-                x1, y1, x2, y2 = map(int, fbox)
-                roi = img[y1:y2, x1:x2]
-                if roi.size == 0:
-                    continue
-                if is_andon_face(img, fbox):
-                    print(f"'Andon' face detected in {path}")
-                    continue
-                img[y1:y2, x1:x2] = blur(roi)
+        # 保存先のパスをインプット側のディレクトリ構造を保って作成
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        cv2.imwrite(str(save_path), img)
 
-            # 保存先のパスをインプット側のディレクトリ構造を保って作成
-            rel_path = path.relative_to(in_dir)
-            save_path = out_dir / rel_path
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-
-            cv2.imwrite(str(save_path), img)
+    if skipped:
+        print(f"Skipped {skipped} already-rendered files (use --force to redo).")
 
 
 if __name__ == "__main__":
-    import argparse
-    import textwrap
-
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawTextHelpFormatter,
         description=textwrap.dedent(
@@ -120,17 +205,44 @@ if __name__ == "__main__":
             Face Blurrer
 
             This script detects faces in images and applies a Gaussian blur to them.
-            It processes images in batches for efficiency.
+            Processing is split into three resumable phases:
 
-            Usage:
-                python main.py -i <input_directory> -o <output_directory>
+                detect: detect faces in all images -> <work_dir>/detections.json
+                review: ask y/n for suspected andon faces -> <work_dir>/decisions.json
+                render: blur non-andon faces and write results -> <out_dir>
+
+            Running without a command executes all three phases in order.
 
             Default input directory: 'in'
             Default output directory: 'out'
+            Default work directory: 'work'
         """
         ),
     )
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["detect", "review", "render", "all"],
+        default="all",
+    )
     parser.add_argument("-i", "--in_dir", default="in")
     parser.add_argument("-o", "--out_dir", default="out")
+    parser.add_argument("-w", "--work_dir", default="work")
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="re-render files that already exist in out_dir",
+    )
     args = parser.parse_args()
-    process_dir(args.in_dir, args.out_dir)
+
+    in_dir, out_dir, work_dir = (
+        Path(args.in_dir),
+        Path(args.out_dir),
+        Path(args.work_dir),
+    )
+    if args.command in ("detect", "all"):
+        detect(in_dir, work_dir)
+    if args.command in ("review", "all"):
+        review(in_dir, work_dir)
+    if args.command in ("render", "all"):
+        render(in_dir, out_dir, work_dir, force=args.force)
