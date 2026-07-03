@@ -17,8 +17,9 @@ BATCH = 8  # 処理バッチ数
 # 数 px になり検出漏れするため、デフォルトを大きめにしている
 DEFAULT_IMGSZ = 1280
 DEFAULT_CONF = 0.25  # YOLO デフォルトと同じ
-# 再エンコードによる劣化をできるだけ抑える (cv2 デフォルトは 95)
-DEFAULT_JPEG_QUALITY = 97
+# 元画像のエンコード品質 (スマホ ~94 / 一眼 ~95-98) に近づけ、
+# 劣化を抑えつつファイルサイズの膨張も避ける
+DEFAULT_JPEG_QUALITY = 95
 FACE_RATIO_HIGH_THRESHOLD = 0.008
 FACE_RATIO_LOW_THRESHOLD = 0.004
 FACE_TOP_BAND = 0.4  # 顔の中心がこの比率より上にあれば行灯の顔の疑い
