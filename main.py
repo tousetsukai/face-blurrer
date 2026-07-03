@@ -13,6 +13,7 @@ BLUR_PASSES = 2  # ぼかし回数
 BATCH = 8  # 処理バッチ数
 FACE_RATIO_HIGH_THRESHOLD = 0.008
 FACE_RATIO_LOW_THRESHOLD = 0.004
+FACE_TOP_BAND = 0.4  # 顔の中心がこの比率より上にあれば行灯の顔の疑い
 IMG_EXTS = ("jpg", "jpeg", "png")
 
 DETECTIONS_FILE = "detections.json"
@@ -54,6 +55,11 @@ def is_suspect(size, box):
         return True
     # 画像の上半分に少し大きめの顔がある場合は行灯の顔の疑い
     if y1 < height / 2 and face_ratio >= FACE_RATIO_LOW_THRESHOLD:
+        return True
+    # 画像の上部にある顔は、小さくても行灯の顔の疑い
+    # (実際の人の顔は画角の下側に集まりやすく、上部の小さい顔を無条件に
+    #  ぼかすと行灯の顔を巻き込むことがあったため)
+    if (y1 + y2) / 2 < height * FACE_TOP_BAND:
         return True
     return False
 
